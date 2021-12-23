@@ -103,7 +103,7 @@ class SafeLearning():
         if isinstance(next_states, Sequence):
             next_states, error_bounds = next_states
             lv = self.lipschitz_lyapunov(next_states.detach().numpy())
-            bound = torch.sum(torch.tensor(lv) * error_bounds, dim=1, keepdims=True)
+            bound = torch.sum(torch.tensor(lv) * torch.sqrt(error_bounds) * self.beta, dim=1, keepdims=True)
 
         else:
           bound = torch.tensor(0., dtype=torch.float32)

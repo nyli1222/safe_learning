@@ -28,7 +28,7 @@ class GaussianProcess():
       
       v = torch.triangular_solve(Kx, self.L, upper=False)[0]
 
-      a = torch.triangular_solve(self.Y - self.mean_function(self.X).reshape(-1,1), L)[0]
+      a = torch.triangular_solve(self.Y - self.mean_function(self.X).reshape(-1,1), self.L)[0]
    
       fmean = torch.matmul(torch.transpose(a,0,1), v) + self.mean_function(Xnew)
       

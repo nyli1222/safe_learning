@@ -17,7 +17,7 @@ class V(torch.autograd.Function):
         # We return as many input gradients as there were arguments.
         # Gradients of non-Tensor arguments to forward must be None.
         input, = ctx.saved_tensors
-        grad = ctx.value_function = value_function.tri.gradient(input.detach().numpy())
+        grad = ctx.value_function.tri.gradient(input.detach().numpy())
         grad_input = grad_output.clone()
         grad_input = grad_input*torch.tensor(grad)
         return grad_input, None
@@ -105,7 +105,7 @@ class Triangulation():
 
     def __call__(self, points):
         if isinstance(points, torch.Tensor):
-            return V.apply(points, self.compute_value)
+            return V.apply(points, self)
         else:
             return self.compute_value(points)
 
