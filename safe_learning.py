@@ -260,7 +260,7 @@ class SafeLearning():
         next_states, bound = self.dynamics(state_actions)
         # Todo local lipschitz
         lv = self.lipschitz_lyapunov(next_states)
-        beta = 2
+        beta = 2.
         means, variances = dynamics(state_actions)
         std_sum = torch.sum(variances.sqrt(), axis=1, keepdims=True)
         upper_bound = lv * std_sum

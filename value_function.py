@@ -1,6 +1,27 @@
 from scipy import sparse, spatial
 from itertools import product as cartesian
 import numpy as np
+import torch
+
+class V(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input, value_function):
+        # ctx is a context object that can be used to stash information
+        # for backward computation
+        ctx.save_for_backward(input)
+        ctx.value_function = value_function
+        return torch.tensor(value_function.compute_value(input.detach().numpy()))
+ 
+    @staticmethod
+    def backward(ctx, grad_output):
+        # We return as many input gradients as there were arguments.
+        # Gradients of non-Tensor arguments to forward must be None.
+        input, = ctx.saved_tensors
+        grad = ctx.value_function = value_function.tri.gradient(input.detach().numpy())
+        grad_input = grad_output.clone()
+        grad_input = grad_input*torch.tensor(grad)
+        return grad_input, None
+
 
 class Triangulation():
     def __init__(self, discretization, vertex_values, project=True):
@@ -54,8 +75,7 @@ class Triangulation():
         # Pre-multiply each hyperplane by (point - origin)
         return origins, hyperplanes, simplices
 
-    def build_evaluation(self, points):
-        """Evaluate using tensorflow."""
+    def compute_value(self, points: np.array):
         # Get the appropriate hyperplane
         origins, hyperplanes, simplices = self._get_hyperplanes(points)
         
@@ -81,6 +101,13 @@ class Triangulation():
         parameter_vector = self.tri.parameters[simplices]
         # Compute the values
         return np.sum(weights[:, :, None] * parameter_vector, axis=1)
+
+
+    def __call__(self, points):
+        if isinstance(points, torch.Tensor):
+            return V.apply(points, self.compute_value)
+        else:
+            return self.compute_value(points)
 
 
 
@@ -117,7 +144,7 @@ class _Triangulation():
     
         product = cartesian(*np.diag(disc.unit_maxes))
         hyperrectangle_corners = np.array(list(product),
-                                              dtype=config.np_dtype)
+                                              dtype=np.float32)
         self.triangulation = spatial.Delaunay(hyperrectangle_corners)
         self.unit_simplices = self._triangulation_simplex_indices()
 
@@ -187,7 +214,7 @@ class _Triangulation():
         """Compute the simplex hyperplane parameters on the triangulation."""
         self.hyperplanes = np.empty((self.triangulation.nsimplex,
                                      self.input_dim, self.input_dim),
-                                    dtype=config.np_dtype)
+                                    dtype=np.float32)
 
         # Use that the bottom-left rectangle has the index zero, so that the
         # index numbers of scipy correspond to ours.
