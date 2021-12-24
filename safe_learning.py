@@ -1,12 +1,13 @@
 from collections import Sequence
 import torch
 import numpy as np
+from utilities import batchify
 
 class SafeLearning():
     
     def __init__(self, discretization, lyapunov_function, dynamics,
                  lipschitz_dynamics, lipschitz_lyapunov,
-                 tau, policy, initial_set=None, adaptive=False):
+                 tau, policy, beta=1., initial_set=None, adaptive=False):
         
         super(SafeLearning, self).__init__()
 
@@ -20,6 +21,8 @@ class SafeLearning():
         self.initial_safe_set = initial_set
         if initial_set is not None:
             self.safe_set[initial_set] = True
+
+        self.beta = beta
 
         # Discretization constant
         self.tau = tau
@@ -45,6 +48,90 @@ class SafeLearning():
         self._refinement = np.zeros(discretization.nindex, dtype=int)
         if initial_set is not None:
             self._refinement[initial_set] = 1
+
+    def get_safe_sample(self, perturbations=None, limits=None, positive=False,
+                    num_samples=None, actions=None):
+    
+        """
+        This function returns the most uncertain state-action pair close to the
+        current policy (as a result of the perturbations) that is safe (maps
+        back into the region of attraction).
+        Parameters
+        ----------
+        lyapunov : instance of `Lyapunov'
+            A Lyapunov instance with an up-to-date safe set.
+        perturbations : ndarray
+            An array that, on each row, has a perturbation that is added to the
+            baseline policy in `lyapunov.policy`.
+        limits : ndarray, optional
+            The actuator limits. Of the form [(u_1_min, u_1_max), (u_2_min,..)...].
+            If provided, state-action pairs are clipped to ensure the limits.
+        positive : bool
+            Whether the Lyapunov function is positive-definite (radially
+            increasing). If not, additional checks are carried out to ensure
+            safety of samples.
+        num_samples : int, optional
+            Number of samples to select (uniformly at random) from the safe
+            states within lyapunov.discretization as testing points.
+        actions : ndarray
+            A list of actions to evaluate for each state. Ignored if perturbations
+            is not None.
+        Returns
+        -------
+        state-action : ndarray
+            A row-vector that contains a safe state-action pair that is
+            promising for obtaining future observations.
+        var : float
+            The uncertainty remaining at this state.
+        """
+        # Subsample from all safe states within the discretization
+        safe_idx = np.where(self.safe_set)
+        safe_states = self.discretization.index_to_state(safe_idx)
+        if num_samples is not None and len(safe_states) > num_samples:
+            idx = np.random.choice(len(safe_states), num_samples, replace=True)
+            safe_states = safe_states[idx]
+
+        # Generate state-action pairs around the current policy
+        actions = self.policy(torch.tensor(safe_states, dtype=torch.float32))
+
+        
+        state_actions = perturb_actions(safe_states,
+                                        actions,
+                                        perturbations=perturbations,
+                                        limits=action_limits)
+        
+    
+        next_states, bound = self.dynamics(state_actions)
+        # Todo local lipschitz
+        lv = self.lipschitz_lyapunov(next_states)
+        beta = 2.
+        means, variances = dynamics(state_actions)
+        std_sum = torch.sum(variances.sqrt(), axis=1, keepdims=True)
+        upper_bound = lv * std_sum
+        mean_future_values = self.lyapunov_function(tf_mean)
+
+        # Check whether the value is below c_max
+        future_values = mean_future_values + upper_bound
+        maps_inside = torch.less(future_values, self.c_max)
+
+
+        # Evaluate the safety of the proposed state-action pairs
+        session = tf.get_default_session()
+        (maps_inside, mean, bound) = session.run([tf_maps_inside, tf_mean,
+                                              tf_bound],
+                                             feed_dict=lyapunov.feed_dict)
+        
+        maps_inside = maps_inside.squeeze(axis=1)
+
+        # Check whether states map back to the safe set in expectation
+        if not positive:
+            next_state_index = lyapunov.discretization.state_to_index(mean)
+            safe_in_expectation = lyapunov.safe_set[next_state_index]
+            maps_inside &= safe_in_expectation
+
+
+
+
 
     def lipschitz_lyapunov(self, states):
         """Return the local Lipschitz constant at a given state.
@@ -102,8 +189,8 @@ class SafeLearning():
         """
         if isinstance(next_states, Sequence):
             next_states, error_bounds = next_states
-            lv = self.lipschitz_lyapunov(next_states.detach().numpy())
-            bound = torch.sum(torch.tensor(lv) * torch.sqrt(error_bounds) * self.beta, dim=1, keepdims=True)
+            lv = self.lipschitz_lyapunov(next_states)
+            bound = torch.sum(lv * torch.sqrt(error_bounds) * self.beta, dim=1, keepdims=True)
 
         else:
           bound = torch.tensor(0., dtype=torch.float32)
@@ -136,14 +223,13 @@ class SafeLearning():
         if tau is None:
             tau = self.tau
         lv = self.lipschitz_lyapunov(states)
-        if hasattr(self._lipschitz_lyapunov, '__call__') and lv.shape[1] > 1:
-            lv = tf.norm(lv, ord=1, axis=1, keepdims=True)
-        lf = self.lipschitz_dynamics(states)
+      
+        lf = self.lipschitz_dynamics(states).detach()
         return - lv * (1. + lf) * tau
 
 
     def update_safe_set(self):
-        pdb.set_trace()
+    
         safe_set = np.zeros_like(self.safe_set, dtype=bool)
         refinement = np.zeros_like(self._refinement, dtype=int)
         if self.initial_safe_set is not None:
@@ -205,96 +291,17 @@ class SafeLearning():
 
 
 
-    def get_safe_sample(self, perturbations=None, limits=None, positive=False,
-                    num_samples=None, actions=None):
-    
-        """
-        This function returns the most uncertain state-action pair close to the
-        current policy (as a result of the perturbations) that is safe (maps
-        back into the region of attraction).
-        Parameters
-        ----------
-        lyapunov : instance of `Lyapunov'
-            A Lyapunov instance with an up-to-date safe set.
-        perturbations : ndarray
-            An array that, on each row, has a perturbation that is added to the
-            baseline policy in `lyapunov.policy`.
-        limits : ndarray, optional
-            The actuator limits. Of the form [(u_1_min, u_1_max), (u_2_min,..)...].
-            If provided, state-action pairs are clipped to ensure the limits.
-        positive : bool
-            Whether the Lyapunov function is positive-definite (radially
-            increasing). If not, additional checks are carried out to ensure
-            safety of samples.
-        num_samples : int, optional
-            Number of samples to select (uniformly at random) from the safe
-            states within lyapunov.discretization as testing points.
-        actions : ndarray
-            A list of actions to evaluate for each state. Ignored if perturbations
-            is not None.
-        Returns
-        -------
-        state-action : ndarray
-            A row-vector that contains a safe state-action pair that is
-            promising for obtaining future observations.
-        var : float
-            The uncertainty remaining at this state.
-        """
-        # Subsample from all safe states within the discretization
-        safe_idx = np.where(self.safe_set)
-        safe_states = self.discretization.index_to_state(safe_idx)
-        if num_samples is not None and len(safe_states) > num_samples:
-            idx = np.random.choice(len(safe_states), num_samples, replace=True)
-            safe_states = safe_states[idx]
-
-        # Generate state-action pairs around the current policy
-        actions = self.policy(safe_states)
-
-        
-        state_actions = perturb_actions(safe_states,
-                                        safe_actions,
-                                        perturbations=perturbations,
-                                        limits=action_limits)
-        
-    
-        next_states, bound = self.dynamics(state_actions)
-        # Todo local lipschitz
-        lv = self.lipschitz_lyapunov(next_states)
-        beta = 2.
-        means, variances = dynamics(state_actions)
-        std_sum = torch.sum(variances.sqrt(), axis=1, keepdims=True)
-        upper_bound = lv * std_sum
-        mean_future_values = self.lyapunov_function(tf_mean)
-
-        # Check whether the value is below c_max
-        future_values = mean_future_values + upper_bound
-        maps_inside = torch.less(future_values, self.c_max)
-
-
-        # Evaluate the safety of the proposed state-action pairs
-        session = tf.get_default_session()
-        (maps_inside, mean, bound) = session.run([tf_maps_inside, tf_mean,
-                                              tf_bound],
-                                             feed_dict=lyapunov.feed_dict)
-        
-        maps_inside = maps_inside.squeeze(axis=1)
-
-        # Check whether states map back to the safe set in expectation
-        if not positive:
-            next_state_index = lyapunov.discretization.state_to_index(mean)
-            safe_in_expectation = lyapunov.safe_set[next_state_index]
-            maps_inside &= safe_in_expectation
+ 
 
 
 
 def perturb_actions(states, actions, perturbations, limits=None):
     
     num_states, state_dim = states.shape
-    states_new = np.repeat(states, len(perturbations), axis=0)
-
+    states_new = states.repeat_interleave(len(perturbations), dim=0)
     # generate perturbations from perturbations around baseline policy
-    actions_new = np.repeat(actions, len(perturbations), axis=0) + np.tile(perturbations,(num_states,1))
-    state_actions = np.column_stack([states_new, actions_new])
+    actions_new = actions.repeat_interleave(len(perturbations), dim=0) + perturbations.repeat(num_states,1)
+    state_actions = torch.concat([states_new, actions_new], dim=1)
 
     if limits is not None:
         # Clip the actions
