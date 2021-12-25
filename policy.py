@@ -1,4 +1,5 @@
 import torch
+from configuration import config
 
 class Policy(torch.nn.Module):
 
@@ -23,10 +24,21 @@ class Policy(torch.nn.Module):
        return self.pi(states)
   
 
-    def mlp(self, sizes, activations, output_activation=torch.nn.Tanh):
+    def mlp(self, sizes, activations):
         layers = []
         for j in range(len(sizes)-2):
-            layers += [torch.nn.Linear(sizes[j], sizes[j+1], bias=self.use_bias), activations[j]()]
+            layers += [torch.nn.Linear(sizes[j], sizes[j+1], bias=self.use_bias, dtype=config.dtype), activations[j]()]
         
-        layers += [torch.nn.Linear(sizes[-2], sizes[-1], bias=False), activations[-1]()]
+        layers += [torch.nn.Linear(sizes[-2], sizes[-1], bias=False, dtype=config.dtype), activations[-1]()]
         return torch.nn.Sequential(*layers)
+
+    def lipschitz(self):
+        lipschitz = torch.tensor(1, dtype=config.dtype)
+
+        for i, param in enumerate(self.parameters()):
+            if self.use_bias and i%2:
+                pass
+        else:
+            lipschitz *= torch.max(torch.svd(param)[1])
+ 
+        return lipschitz

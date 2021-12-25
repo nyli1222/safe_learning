@@ -2,6 +2,8 @@ import gpytorch
 import torch
 from gpytorch.lazy import RootLazyTensor
 from gpytorch.lazy import MatmulLazyTensor
+import numpy as np
+from configuration import config
 
 class GaussianProcess():
   
@@ -25,11 +27,8 @@ class GaussianProcess():
 
     else:
       Kx = self.kernel(self.X, Xnew).evaluate()
-      
       v = torch.triangular_solve(Kx, self.L, upper=False)[0]
-
-      a = torch.triangular_solve(self.Y - self.mean_function(self.X).reshape(-1,1), self.L)[0]
-   
+      a = torch.triangular_solve(self.Y - self.mean_function(self.X).reshape(-1,1), self.L, upper=False)[0]
       fmean = torch.matmul(torch.transpose(a,0,1), v) + self.mean_function(Xnew)
       
       fvar = self.kernel(Xnew).diag() - torch.sum(torch.square(v), 0)
@@ -51,11 +50,12 @@ class GaussianProcess():
           self.Y = Y
       
         else:
-          self.X = np.vstack((self.X, np.atleast_2d(X)))
-          self.Y = np.vstack((self.Y, np.atleast_2d(Y)))
-
-        K = self.kernel(self.X, self.X).evaluate() 
-        self.L = torch.linalg.cholesky(K)
+          self.X = torch.concat((self.X, X))
+          self.Y = torch.concat((self.Y, Y))
+      
+        K = self.kernel(self.X).evaluate() + torch.eye(self.X.shape[0], dtype=config.dtype) * self.likelihood_variance
+        #Todo
+        self.L = torch.linalg.cholesky(K).detach()
 
 
 

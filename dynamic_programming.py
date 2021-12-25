@@ -1,6 +1,7 @@
 import cvxpy
 import numpy as np
 import torch
+from configuration import config
 
 class PolicyIteration(object):
 
@@ -14,7 +15,7 @@ class PolicyIteration(object):
     self.value_function = value_function
     self.gamma = gamma
 
-    self.state_space = torch.tensor(self.value_function.discretization.all_points, dtype=torch.float32)
+    self.state_space = torch.tensor(self.value_function.discretization.all_points, dtype=config.dtype)
     
     #self.state_space = tf.stack(state_space, name='state_space')
 
@@ -52,14 +53,15 @@ class PolicyIteration(object):
     actions = self.policy(self.state_space)
     state_actions = torch.concat([self.state_space, actions],axis=1)
     next_states = self.dynamics(state_actions)
- 
+
     # Only use the mean dynamics
     if isinstance(next_states, tuple):
       next_states, var = next_states
 
-      rewards = self.reward_function(self.state_space,
-                                       actions)
 
+      rewards = self.reward_function(state_actions)
+      next_states = next_states.detach().numpy()
+      rewards = rewards.detach().numpy()
       values = self._run_cvx_optimization(next_states,
                                             rewards,
                                             **solver_options)
@@ -89,6 +91,13 @@ class PolicyIteration(object):
 
     # Perform value update
     updated_values = rewards + self.gamma * expected_values
+
+    if lyapunov is not None:
+      decrease = lyapunov.v_decrease_bound(states, (next_states, var))
+
+      # Want to enfore `constraint <= 0`
+      constraint = decrease - lyapunov.threshold(states)
+      updated_values -= lagrange_multiplier * constraint
 
     
     return updated_values

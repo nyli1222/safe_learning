@@ -1,5 +1,6 @@
 import numpy as np
 from scipy import signal
+from configuration import config
 
 class InvertedPendulum():
    
@@ -43,10 +44,10 @@ class InvertedPendulum():
             return state, action
 
         Tx_inv, Tu_inv = map(np.diag, self.inv_norm)
-        state = tf.matmul(state, Tx_inv)
+        state = np.matmul(state, Tx_inv)
 
         if action is not None:
-            action = tf.matmul(action, Tu_inv)
+            action = np.matmul(action, Tu_inv)
 
         return state, action
 
@@ -57,9 +58,9 @@ class InvertedPendulum():
 
         Tx, Tu = map(np.diag, self.normalization)
 
-        state = tf.matmul(state, Tx)
+        state = np.matmul(state, Tx)
         if action is not None:
-            action = tf.matmul(action, Tu)
+            action = np.matmul(action, Tu)
 
         return state, action
 
@@ -100,7 +101,7 @@ class InvertedPendulum():
     def __call__(self, state_action):
         """Evaluate the dynamics."""
         # Denormalize
-        state, action = tf.split(state_action, [2, 1], axis=1)
+        state, action = np.split(state_action, [2], axis=1)
         state, action = self.denormalize(state, action)
 
         n_inner = 10
@@ -130,14 +131,14 @@ class InvertedPendulum():
         friction = self.friction
         inertia = self.inertia
 
-        angle, angular_velocity = tf.split(state, 2, axis=1)
+        angle, angular_velocity = np.split(state, [1], axis=1)
 
-        x_ddot = gravity / length * tf.sin(angle) + action / inertia
+        x_ddot = gravity / length * np.sin(angle) + action / inertia
 
         if friction > 0:
             x_ddot -= friction / inertia * angular_velocity
 
-        state_derivative = tf.concat((angular_velocity, x_ddot), axis=1)
+        state_derivative = np.concatenate((angular_velocity, x_ddot), axis=1)
 
         # Normalize
         return state_derivative

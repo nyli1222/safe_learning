@@ -2,6 +2,7 @@ from scipy import sparse, spatial
 from itertools import product as cartesian
 import numpy as np
 import torch
+from configuration import config
 
 class V(torch.autograd.Function):
     @staticmethod
@@ -109,7 +110,13 @@ class Triangulation():
         else:
             return self.compute_value(points)
 
-
+    def gradient(self, states):
+        if isinstance(states, torch.Tensor):
+            states = states.detach().numpy()
+            grad = self.tri.gradient(states)
+            return torch.tensor(grad, dtype=config.dtype)
+        else:
+            return self.tri.gradient(states)
 
 class _Triangulation():
     """
@@ -144,7 +151,7 @@ class _Triangulation():
     
         product = cartesian(*np.diag(disc.unit_maxes))
         hyperrectangle_corners = np.array(list(product),
-                                              dtype=np.float32)
+                                              dtype=config.np_dtype)
         self.triangulation = spatial.Delaunay(hyperrectangle_corners)
         self.unit_simplices = self._triangulation_simplex_indices()
 
@@ -214,7 +221,7 @@ class _Triangulation():
         """Compute the simplex hyperplane parameters on the triangulation."""
         self.hyperplanes = np.empty((self.triangulation.nsimplex,
                                      self.input_dim, self.input_dim),
-                                    dtype=np.float32)
+                                    dtype=config.np_dtype)
 
         # Use that the bottom-left rectangle has the index zero, so that the
         # index numbers of scipy correspond to ours.

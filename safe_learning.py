@@ -1,13 +1,15 @@
+from functools import update_wrapper
 from collections import Sequence
 import torch
 import numpy as np
 from utilities import batchify
+from configuration import config
 
 class SafeLearning():
     
     def __init__(self, discretization, lyapunov_function, dynamics,
                  lipschitz_dynamics, lipschitz_lyapunov,
-                 tau, policy, beta=1., initial_set=None, adaptive=False):
+                 tau, policy, beta=2., initial_set=None, adaptive=False):
         
         super(SafeLearning, self).__init__()
 
@@ -40,7 +42,7 @@ class SafeLearning():
         self._lipschitz_dynamics = lipschitz_dynamics
         self._lipschitz_lyapunov = lipschitz_lyapunov
 
-        #self.discretization_points = torch.tensor(self.discretization.all_points, dtype=torch.float32)
+        #self.discretization_points = torch.tensor(self.discretization.all_points, dtype=config.dtype)
 
         self.update_values()
 
@@ -92,45 +94,43 @@ class SafeLearning():
             safe_states = safe_states[idx]
 
         # Generate state-action pairs around the current policy
-        actions = self.policy(torch.tensor(safe_states, dtype=torch.float32))
+        safe_states = torch.tensor(safe_states, dtype=config.dtype)
+        actions = self.policy(safe_states).detach()
 
         
         state_actions = perturb_actions(safe_states,
                                         actions,
                                         perturbations=perturbations,
-                                        limits=action_limits)
+                                        limits=limits)
         
     
-        next_states, bound = self.dynamics(state_actions)
+        next_states, variances = self.dynamics(state_actions)
+        
         # Todo local lipschitz
         lv = self.lipschitz_lyapunov(next_states)
-        beta = 2.
-        means, variances = dynamics(state_actions)
         std_sum = torch.sum(variances.sqrt(), axis=1, keepdims=True)
-        upper_bound = lv * std_sum
-        mean_future_values = self.lyapunov_function(tf_mean)
+        upper_bound = lv * std_sum * self.beta
+        next_states_values = self.lyapunov_function(next_states)
 
         # Check whether the value is below c_max
-        future_values = mean_future_values + upper_bound
+        future_values = next_states_values + upper_bound
         maps_inside = torch.less(future_values, self.c_max)
 
-
-        # Evaluate the safety of the proposed state-action pairs
-        session = tf.get_default_session()
-        (maps_inside, mean, bound) = session.run([tf_maps_inside, tf_mean,
-                                              tf_bound],
-                                             feed_dict=lyapunov.feed_dict)
-        
-        maps_inside = maps_inside.squeeze(axis=1)
+        maps_inside = maps_inside.squeeze(axis=1).detach().numpy()
+        state_actions = state_actions.detach().numpy()
+        upper_bound = upper_bound.detach().numpy()
 
         # Check whether states map back to the safe set in expectation
         if not positive:
-            next_state_index = lyapunov.discretization.state_to_index(mean)
-            safe_in_expectation = lyapunov.safe_set[next_state_index]
+            next_state_index = self.discretization.state_to_index(next_states.detach().numpy())
+            safe_in_expectation = self.safe_set[next_state_index]
             maps_inside &= safe_in_expectation
 
-
-
+        #Todo if nothing is safe
+        bound_safe = upper_bound[maps_inside]
+        max_id = np.argmax(bound_safe)
+        max_bound = bound_safe[max_id].squeeze()
+        return state_actions[maps_inside, :][[max_id]], max_bound
 
 
     def lipschitz_lyapunov(self, states):
@@ -193,7 +193,7 @@ class SafeLearning():
             bound = torch.sum(lv * torch.sqrt(error_bounds) * self.beta, dim=1, keepdims=True)
 
         else:
-          bound = torch.tensor(0., dtype=torch.float32)
+          bound = torch.tensor(0., dtype=config.dtype)
 
         v_decrease = (self.lyapunov_function(next_states)
                       - self.lyapunov_function(states))
@@ -246,7 +246,7 @@ class SafeLearning():
 
         for i, (indices, safe_batch, refine_batch) in batch_generator:
            
-            states = torch.tensor(index_to_state(indices), dtype=torch.float32)
+            states = torch.tensor(index_to_state(indices), dtype=config.dtype)
             actions = self.policy(states)
             state_actions = torch.concat([states, actions], dim=1)
             next_states = self.dynamics(state_actions)
@@ -260,7 +260,6 @@ class SafeLearning():
             # Boolean array: argmin returns first element that is False
             # If all are safe then it returns 0
             bound = np.argmin(safe_batch)
-            print(bound)
             refine_bound = 0
 
             # Check if there are unsafe elements in the batch
@@ -306,7 +305,7 @@ def perturb_actions(states, actions, perturbations, limits=None):
     if limits is not None:
         # Clip the actions
         perturbations = state_actions[:, state_dim:]
-        np.clip(perturbations, limits[:, 0], limits[:, 1], out=perturbations)
+        torch.clip(perturbations, limits[:, 0], limits[:, 1], out=perturbations)
         # Remove rows that are not unique
         #Todo
         #state_actions = unique_rows(state_actions)
@@ -331,3 +330,7 @@ class Dynamics():
             offset += f.input_dim
     
         return next_states_mean, next_states_vars
+
+    def add_data_point(self, state_actions, measurements):
+        for i,f in enumerate(self.functions):
+            f.add_data_point(state_actions, measurements[:,i].reshape(-1,1))
