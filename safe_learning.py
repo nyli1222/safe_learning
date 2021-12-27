@@ -109,7 +109,8 @@ class SafeLearning():
         # Todo local lipschitz
         lv = self.lipschitz_lyapunov(next_states)
         std_sum = torch.sum(variances.sqrt(), axis=1, keepdims=True)
-        upper_bound = lv * std_sum * self.beta
+        bound = std_sum * self.beta
+        upper_bound = lv * bound
         next_states_values = self.lyapunov_function(next_states)
 
         # Check whether the value is below c_max
@@ -118,7 +119,7 @@ class SafeLearning():
 
         maps_inside = maps_inside.squeeze(axis=1).detach().numpy()
         state_actions = state_actions.detach().numpy()
-        upper_bound = upper_bound.detach().numpy()
+        bound = bound.detach().numpy()
 
         # Check whether states map back to the safe set in expectation
         if not positive:
@@ -127,7 +128,7 @@ class SafeLearning():
             maps_inside &= safe_in_expectation
 
         #Todo if nothing is safe
-        bound_safe = upper_bound[maps_inside]
+        bound_safe = bound[maps_inside]
         max_id = np.argmax(bound_safe)
         max_bound = bound_safe[max_id].squeeze()
         return state_actions[maps_inside, :][[max_id]], max_bound
